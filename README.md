@@ -327,18 +327,6 @@ that data will not flow through the stream [until it's consumed][reading modes].
 This function calls `flush`, then closes all streams and exits cleanly.  The parent `TailFile` stream will be
 properly ended by pushing `null`, therefore an `end` event may be emitted as well.
 
-`quit()` is graceful: it finishes the current read, polls once more, and waits for
-backpressure to clear before closing file handles. Keep consuming the stream while
-awaiting it. If a consumer remains paused, `quit()` can remain pending indefinitely;
-lossless draining has no fixed deadline. Repeated calls share the same shutdown.
-Stop the writer first if a finite final snapshot is required.
-
-For abortive cancellation, use the inherited `tail.destroy()` (or
-`tail.destroy(error)`) and wait for `close`. Cancellation stops polling, wakes a
-backpressured read, and closes owned streams and file handles after pending I/O
-settles. It can discard unread data and does not perform a final poll or emit
-`flush`. An outstanding `quit()` also settles when cancellation interrupts it.
-
 ## Program Flow
 
 Using "file watcher" events don't always work across different operating systems,
@@ -356,14 +344,16 @@ This allows backpressure to be supported throughout the process.
 `TailFile` keeps a [`FileHandle`][] open for the `filename`, which is attached to an
 inode.  If log rolling happens, `TailFile` uses the `FileHandle` to read the rest of the
 "old" file before starting the process from the beginning of the newly-created file.
-The remainder is read in byte chunks bounded by the smaller of
-`highWaterMark` (the outer `Readable`'s current high water mark) and
-`readStreamOpts.highWaterMark` (default `64 * 1024`). A zero high water mark uses
-one-byte rotation reads so that reading can progress. Each allocation and read
+The remainder is read in byte chunks bounded by `highWaterMark` (the outer
+`Readable`'s current high water mark). A zero high water mark uses a 64 KiB
+fallback so that reading can progress. `readStreamOpts.highWaterMark` controls
+ordinary file-stream reads, not rotation remainder reads. Each allocation and read
 request obeys this bound; no buffer proportional to the unread file size is
 allocated. Partial reads emit only the bytes actually read. Reading stops at the
 old file's size observed when draining begins, or earlier EOF, and respects
 backpressure before issuing another read. Buffers are not reused after emission.
+Keep consuming the stream while awaiting graceful `quit()`; a paused remainder
+can keep the final read pending until consumption resumes.
 The outer queue can exceed its high water mark by at most one rotation chunk;
 consumer-retained data and ordinary file-stream buffers are additional memory.
 This is a byte stream: chunks need not align with lines or UTF-8 characters. Use
