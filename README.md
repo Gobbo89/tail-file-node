@@ -344,25 +344,10 @@ This allows backpressure to be supported throughout the process.
 `TailFile` keeps a [`FileHandle`][] open for the `filename`, which is attached to an
 inode.  If log rolling happens, `TailFile` uses the `FileHandle` to read the rest of the
 "old" file before starting the process from the beginning of the newly-created file.
-The remainder is read in byte chunks bounded by `highWaterMark` (the outer
-`Readable`'s current high water mark). A zero high water mark uses a 64 KiB
-fallback so that reading can progress. `readStreamOpts.highWaterMark` controls
-ordinary file-stream reads, not rotation remainder reads. Each allocation and read
-request obeys this bound; no buffer proportional to the unread file size is
-allocated. Partial reads emit only the bytes actually read. Reading stops at the
-old file's size observed when draining begins, or earlier EOF, and respects
-backpressure before issuing another read. Buffers are not reused after emission.
-Keep consuming the stream while awaiting graceful `quit()`; a paused remainder
-can keep the final read pending until consumption resumes.
-The outer queue can exceed its high water mark by at most one rotation chunk;
-consumer-retained data and ordinary file-stream buffers are additional memory.
-This is a byte stream: chunks need not align with lines or UTF-8 characters. Use
-the outer `encoding: 'utf8'` option or a streaming decoder when consuming text.
-
-This handles a single observed rotation. Intermediate archives are not enumerated
-or replayed: multiple rotations between polling observations can lose data even
-when every archive is retained. Continuous appends to an already rotated file
-after its size was observed are also outside this snapshot.
+The remainder is read with backpressure in chunks bounded by the outer
+`highWaterMark`, with a 64 KiB fallback when it is zero. Only a single rotation
+between polls is covered; intermediate archives are not replayed, so multiple
+rotations between polls can lose data even when the archives are retained.
 This functionality assumes that `filename` is re-created with the same name,
 otherwise an error is emitted if `filename` does not re-appear.
 
@@ -382,11 +367,6 @@ If polling is off during backpressure, `TailFile` can handle
 [a single log roll or rename](#how-log-rolling-is-handled) during backpressure, but if
 the log is renamed more than once, there will most likely be data loss, as polling for
 changes will be off.
-
-The same limitation applies whenever multiple rotations occur between polls,
-including while a consumer is flowing. Consume promptly and choose a polling
-interval appropriate for the writer; neither guarantees delivery across multiple
-unobserved rotations.
 
 ## Contributing
 
